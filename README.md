@@ -1,5 +1,7 @@
 ## Exploring Transition Space with Causality Discovering and Re-composing
 
+Official implementation for the paper Exploring Transition Space with Causality Discovering and Re-composing, which is under review.
+
 ## Setup
 
 Create the conda environment by running : 
