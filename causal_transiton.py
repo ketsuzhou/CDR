@@ -309,25 +309,27 @@ class CausalTransition(tools.Module):
 
         # state_act_, state_act = tf.split(
         #     state_act_, [-1, 1], 1)[0], tf.split(state_act, [-1, 1], 1)[0]
-        parts = self.mlp1(tf.concat([state_act_, state_act], -1))
-        reset, cand, update = tf.split(parts, 3, axis=-1)
-        reset = tf.nn.sigmoid(reset)
-        cand = tf.tanh(reset * state_act + cand)
-        update = tf.nn.sigmoid(update)
-        state_act = update * cand + (1 - update) * state_act
+        # parts = self.mlp1(tf.concat([state_act_, state_act], -1))
+        # reset, cand, update = tf.split(parts, 3, axis=-1)
+        # reset = tf.nn.sigmoid(reset)
+        # cand = tf.tanh(reset * state_act + cand)
+        # update = tf.nn.sigmoid(update)
+        # state_act = update * cand + (1 - update) * state_act
 
         # out_state_act, state_act = self.mlp2(out_state_act), self.mlp2(state_act)
 
         # stop_out_state_act = tf.stop_gradient(out_state_act)
-        parts = self.mlp3(tf.concat([out_state_act, state_act], -1))
-        reset, update = tf.split(parts, 2, axis=-1)
-        reset, update = tf.reduce_mean(reset, -1, True), tf.reduce_mean(update, -1, True)
+        # parts = self.mlp3(tf.concat([out_state_act, state_act], -1))
+        # reset, update = tf.split(parts, 2, axis=-1)
+        # reset, update = tf.reduce_mean(reset, -1, True), tf.reduce_mean(update, -1, True)
         # reset = tf.nn.sigmoid(reset)
         # cand = tf.tanh(out_state_act_)
-        update = tf.nn.sigmoid(update)
+        # update = tf.nn.sigmoid(update)
         # weight = update * reset
-        state_act = update * tf.tanh(out_state_act)  + (1 - update) * state_act
-
+        # state_act = update * tf.tanh(out_state_act)  + (1 - update) * state_act
+        
+        state_act = out_state_act
+        
         state = tf.split(state_act, [-1, 1], 1)[0]
 
         elbow_sms = (tf.reduce_max(pre_state_atten, -1, keepdims=True) 
@@ -337,7 +339,7 @@ class CausalTransition(tools.Module):
         decision = tf.cast(mask_state, dtype=dtype)
 
         if return_more:
-            return state, action_embed, decision, update
+            return state, action_embed, decision
         else:
             return state
 

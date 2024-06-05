@@ -1,98 +1,97 @@
-from re import L, M
-import re
 import tensorflow as tf
 from tensorflow.keras.mixed_precision import experimental as prec
 from tensorflow_probability import distributions as tfd
-import numpy as np
 
-from cond_sampler import CondSampler
 import models
 import networks
 import tools
-# from normalizer import Normalizer
+
 
 class Random(tools.Module):
 
-    def __init__(self, config):
+  def __init__(self, config):
 
-        self._config = config
-        self._float = prec.global_policy().compute_dtype
 
-    def actor(self, feat, *args):
-        shape = feat.shape[:-1] + [self._config.num_actions]
-        if self._config.actor_dist == 'onehot':
-            return tools.OneHotDist(tf.zeros(shape))
-        else:
-            ones = tf.ones(shape, self._float)
-            return tfd.Uniform(-ones, ones)
+    self._config = config
+    self._float = prec.global_policy().compute_dtype
 
-    def train(self, start, feat, embed, kl):
-        return None, {}
+  def actor(self, feat, *args):
+    shape = feat.shape[:-1] + [self._config.num_actions]
+    if self._config.actor_dist == 'onehot':
+      return tools.OneHotDist(tf.zeros(shape))
+    else:
+      ones = tf.ones(shape, self._float)
+      return tfd.Uniform(-ones, ones)
+
+  def train(self, start, feat, embed, kl):
+    return None, {}
 
 
 class Plan2Explore(tools.Module):
 
-    def __init__(self, config, world_model, reward=None):
+  def __init__(self, config, world_model, reward=None):
 
-        self._config = config
-        self._reward = reward
-        self._behavior = models.ImagBehavior(config, world_model)
-        self.actor = self._behavior.actor
-        size = {
-            'embed': 32 * config.cnn_depth,
-            'stoch': config.dyn_stoch,
-            'deter': config.dyn_deter,
-            'feat': config.dyn_stoch + config.dyn_deter,
-        }[self._config.disag_target]
-        kw = dict(
-            shape=size, layers=config.disag_layers, units=config.disag_units,
-            act=config.act)
-        self._networks = [
-            networks.DenseHead(**kw) for _ in range(config.disag_models)]
-        self._opt = tools.Optimizer(
-            'ensemble', config.ensemble_model_lr, config.opt_eps, config.grad_clip,
-            config.weight_decay, opt=config.opt)
+    self._config = config
+    self._reward = reward
+    self._behavior = models.ImagBehavior(config, world_model)
+    self.actor = self._behavior.actor
+    size = {
+        'embed': 32 * config.cnn_depth,
+        'stoch': config.dyn_stoch,
+        'deter': config.dyn_deter,
+        'feat': config.dyn_stoch + config.dyn_deter,
+    }[self._config.disag_target]
+    kw = dict(
+        shape=size, layers=config.disag_layers, units=config.disag_units,
+        act=config.act)
+    self._networks = [
+        networks.DenseHead(**kw) for _ in range(config.disag_models)]
+    self._opt = tools.Optimizer(
+        'ensemble', config.model_lr, config.opt_eps, config.grad_clip,
+        config.weight_decay, opt=config.opt)
 
-    def train(self, start, feat, embed, kl):
-        metrics = {}
-        target = {
-            'embed': embed,
-            'stoch': start['stoch'],
-            'deter': start['deter'],
-            'feat': feat,
-        }[self._config.disag_target]
-        metrics.update(self._train_ensemble(feat, target))
-        metrics.update(self._behavior.train(start, self._intrinsic_reward)[-1])
-        return None, metrics
+  def train(self, start, feat, embed, kl):
+    metrics = {}
+    target = {
+        'embed': embed,
+        'stoch': start['stoch'],
+        'deter': start['deter'],
+        'feat': feat,
+    }[self._config.disag_target]
+    metrics.update(self._train_ensemble(feat, target))
+    metrics.update(self._behavior.train(start, self._intrinsic_reward)[-1])
+    return None, metrics
 
-    def _intrinsic_reward(self, feat, state, action):
-        preds = [head(feat, tf.float32).mean() for head in self._networks]
-        disag = tf.reduce_mean(tf.math.reduce_std(preds, 0), -1)
-        if self._config.disag_log:
-            disag = tf.math.log(disag)
-        reward = self._config.expl_intr_scale * disag
-        if self._config.expl_extr_scale:
-            reward += tf.cast(self._config.expl_extr_scale * self._reward(
-                feat, state, action), tf.float32)
-        return reward
+  def _intrinsic_reward(self, feat, state, action):
+    preds = [head(feat, tf.float32).mean() for head in self._networks]
+    disag = tf.reduce_mean(tf.math.reduce_std(preds, 0), -1)
+    if self._config.disag_log:
+      disag = tf.math.log(disag)
+    reward = self._config.expl_intr_scale * disag
+    if self._config.expl_extr_scale:
+      reward += tf.cast(self._config.expl_extr_scale * self._reward(
+          feat, state, action), tf.float32)
+    return reward
 
-    def _train_ensemble(self, inputs, targets):
+  def _train_ensemble(self, inputs, targets):
 
-        if self._config.disag_offset:
-            targets = targets[:, self._config.disag_offset:]
-            inputs = inputs[:, :-self._config.disag_offset]
-        targets = tf.stop_gradient(targets)
-        inputs = tf.stop_gradient(inputs)
-        with tf.GradientTape() as tape:
-            preds = [head(inputs) for head in self._networks]
-            likes = [tf.reduce_mean(pred.log_prob(targets)) for pred in preds]
-            loss = -tf.cast(tf.reduce_sum(likes), tf.float32)
-        metrics = self._opt(tape, loss, self._networks)
-        return metrics
+    if self._config.disag_offset:
+      targets = targets[:, self._config.disag_offset:]
+      inputs = inputs[:, :-self._config.disag_offset]
+    targets = tf.stop_gradient(targets)
+    inputs = tf.stop_gradient(inputs)
+    with tf.GradientTape() as tape:
+      preds = [head(inputs) for head in self._networks]
+      likes = [tf.reduce_mean(pred.log_prob(targets)) for pred in preds]
+      loss = -tf.cast(tf.reduce_sum(likes), tf.float32)
+    metrics = self._opt(tape, loss, self._networks)
+    return metrics
 
-    def act(self, feat, *args):
-        return self.actor(feat)
+  def act(self, feat, *args):
+    return self.actor(feat)
 
+
+from cond_sampler import CondSampler
 
 class Causal_Plan2Explore(Plan2Explore):
     def __init__(self, config, world_model=None, reward=None):
@@ -114,31 +113,31 @@ class Causal_Plan2Explore(Plan2Explore):
             heads=6, dim_head=20)
             for _ in range(config.disag_models)]
         dtype=prec.global_policy().compute_dtype
-        [head(2, 3, tf.ones([6, 300], dtype=dtype), tf.ones([6, 30], dtype=dtype), tf.zeros([6, 1,10, 11], dtype=dtype)) for head in self.cond_sampler]
+        # [head(2, 3, tf.ones([6, 300], dtype=dtype), tf.ones([6, 30], dtype=dtype), tf.zeros([6, 1,10, 11], dtype=dtype)) for head in self.cond_sampler]
         # tf.keras.mixed_precision.experimental.set_policy('float32')
 
         self._opt = tools.Optimizer(
             'ensemble', config.ensemble_model_lr, config.opt_eps, config.grad_clip,
-            config.weight_decay, opt=config.opt, mixed=True)
+            config.weight_decay, opt=config.opt)
 
         self._random_mask = config.random_mask
         # self.Normalizer = Normalizer()
         self._updates = tf.Variable(0, trainable=False)
 
     # @tf.function
-    def train(self, start, feat, embed, kl, action):
+    def train(self, start, feat, embed, kl):
         metrics = {}
 
-        metrics.update(self._train_ensemble(start, feat, action))
+        metrics.update(self._train_ensemble(start, feat))
         metrics.update(self._behavior.train(start, self._intrinsic_reward)[-1])
 
         return None, metrics
 
     # @tf.function
-    def _train_ensemble(self, start, feat, action):
+    def _train_ensemble(self, start, feat):
         feat = start['deter']
         b, l = feat.shape[:2]
-        action = tf.reshape(action, [-1, action.shape[-1]])
+        # action = tf.reshape(action, [-1, action.shape[-1]])
         feat = tf.reshape(feat, [-1, feat.shape[-1]])
         mask_state = tf.reshape(start['decision'], [-1, *start['decision'].shape[-2:]]) 
         mask_state = tf.expand_dims(tf.split(mask_state, [-1, 1], 1)[0], 1) 
@@ -181,14 +180,14 @@ class Causal_Plan2Explore(Plan2Explore):
         # log_prob_state_mask1 = self.cond_sampler(
         #     h, bl, feat1, action1, mask_state, evaluate=True, num_samples=num_samples)
 
-        weight = tf.cast(tf.squeeze(state['weight'][:-1][:, :, :-1], -1), 'float32') 
+
         log_prob_state_mask = tf.reduce_logsumexp(
             tf.cast(log_prob_state_mask, tf.float32) + tf.math.log(1 / self.disag_models), axis=0)
 
         # log_prob_state_mask1 = tf.reduce_logsumexp(
         #     tf.cast(log_prob_state_mask1, tf.float32) + tf.math.log(1 / num_samples), axis=0)
 
-        reward = -tf.reduce_mean(weight * log_prob_state_mask, -1) / 4
+        reward = -tf.reduce_mean(log_prob_state_mask, -1) / 10
 
         # self.Normalizer.update(
         #     tf.stop_gradient(tf.cast(tf.reshape(reward, [-1, 1]), 'float32')))
@@ -196,7 +195,7 @@ class Causal_Plan2Explore(Plan2Explore):
         # reward = 1 * tf.reduce_mean(
         #     tf.cast(log_prob_state, tf.float32) - log_prob2, axis=-1)
 
-        if self._config.expl_extr_scale:
-            reward += tf.cast(self._config.expl_extr_scale * self._reward(
-                feat, state, action), tf.float32)
+        # if self._config.expl_extr_scale:
+        #     reward += tf.cast(self._config.expl_extr_scale * self._reward(
+        #         feat, state, action), tf.float32)
         return reward
