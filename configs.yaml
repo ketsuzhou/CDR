@@ -64,7 +64,7 @@ defaults:
 
   # Training
   training: True
-  batch_size: 3
+  batch_size: 45
   batch_length: 50
   train_every: 5
   train_steps: 1
